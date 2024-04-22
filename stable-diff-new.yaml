@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stable-diff-new
+  namespace: stable-diff-new
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stable-diff-new
+  template:
+    metadata:
+      labels:
+        app: stable-diff-new
+    spec:
+      runtimeClassName: nvidia
+      nodeSelector:
+        #accelerator: A6000
+        #nvidia.com/gpu.product: NVIDIA-RTX-A6000
+        nvidia.com/gpu.product: NVIDIA-RTX-A6000-SHARED
+      hostIPC: true # For MPS namespace
+      containers:
+        - name: stabl-diff-new
+          image: lagrange.knoxds.org:5000/library/stable-diff-new
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 7860
+          volumeMounts:
+            - mountPath: /app/webui/stable-diffusion-webui/models
+              name: stable-diff-new-pv
+              subPath: models
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          env:
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      volumes:
+        - name: stable-diff-new-pv
+          persistentVolumeClaim:
+            claimName: stable-diff-new-pv
+      imagePullSecrets:
+        - name: harbor-registry-secret
+
+---
+---
+# Service for Traefik Raw TCP Ingress into entrypoint
+apiVersion: v1
+kind: Service
+metadata:
+  name: stable-diff-new
+  namespace: stable-diff-new
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: tcp
+spec:
+  type: ClusterIP
+  selector:
+    app: stable-diff-new
+  ports:
+    - protocol: TCP
+      port: 8701
+      targetPort: 7860
+
+---
+# Traefik ingress to route external traffic to the service
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute # Traefik CRD
+metadata:
+  name: stable-diff-new
+  namespace: stable-diff-new
+spec:
+  entryPoints:
+    - websecure # https
+  routes:
+    - match: Host(`diffusion.knoxds.org/stable-diff-new`)
+      kind: Rule
+      #middlewares:
+      #- name: webwork-https-redirect
+      #- name: webwork-redirect
+      services:
+      - name: diff-webui
+        port: 8701
+  tls:
+    certResolver: letsencrypt
